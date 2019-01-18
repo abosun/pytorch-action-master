@@ -1,0 +1,165 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from utee import misc
+from collections import OrderedDict
+from torch.autograd import Variable
+
+__all__ = ['TimeNet']
+
+
+model_urls = {
+    'inception_v3_google': 'https://download.pytorch.org/models/inception_v3_google-1a9a5a14.pth',
+}
+mid_channels = 100
+
+def inception_v3(pretrained=False, model_root=None, **kwargs):
+    if pretrained:
+        if 'transform_input' not in kwargs:
+            kwargs['transform_input'] = True
+        model = Inception3(**kwargs)
+        misc.load_state_dict(model, model_urls['inception_v3_google'], model_root)
+        return model
+    return Inception3(**kwargs)
+
+def TimeNet(pretrained=False, model_root=None, **kwargs):
+    return MultiLevelAttention(**kwargs)
+
+class MultiLevelAttention(nn.Module):
+
+    def __init__(self, in_channels, num_classes=101, transform_input=False, drop_rate=0.5):
+        super(MultiLevelAttention, self).__init__()
+        self.MidAttention = LongTermAttention(in_channels, 1,kernel_size=1)#TemporalAttention_withCenLoss(in_channels, 1,kernel_size=1)
+        self.group1 = nn.Sequential(
+            OrderedDict([
+                ('fc', nn.Linear(in_channels, num_classes))
+            ])
+        )
+        self.drop_rate = drop_rate
+
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+                import scipy.stats as stats
+                stddev = m.stddev if hasattr(m, 'stddev') else 0.1
+                X = stats.truncnorm(-2, 2, scale=stddev)
+                values = torch.Tensor(X.rvs(m.weight.data.numel()))
+                m.weight.data.copy_(values)
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+
+    def forward(self, x):
+        x = self.MidAttention(x)
+        x = x.view(x.size(0), -1)
+        x = F.dropout(x, p=self.drop_rate, training=self.training)
+#        x = x.view(x.size(0), -1)
+        x = self.group1(x)
+        return x#, CenLoss
+
+class LongTermAttention(nn.Module):
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super(LongTermAttention, self).__init__()
+        self.hidden_dim = in_channels
+        self.batch_size = 1#batch_size
+        self.lstm = nn.LSTM(in_channels, self.hidden_dim)
+        self.Attention = TemporalAttention(self.hidden_dim, out_channels,**kwargs)
+        self.hidden = None
+        self.hidden = self.init_hidden()
+    def init_hidden(self,x=None):
+        if not x is None:
+          return (Variable(x[0].data),Variable(x[1].data))
+        h0 = Variable(torch.zeros(1, 1, self.hidden_dim).cuda())
+        c0 = Variable(torch.zeros(1, 1, self.hidden_dim).cuda())
+        return (h0, c0)
+    def forward(self, x):
+        if not self.batch_size==x.size(0):
+            self.batch_size = x.size(0)
+            self.hidden = (self.hidden[0].repeat(1,x.size(0),1), self.hidden[1].repeat(1,x.size(0),1))
+#        print(x.shape, x.size(0), x.size(1))
+#        hidden = (self.hidden[0].repeat(1,x.size(0),1), self.hidden[1].repeat(1,x.size(0),1))
+        emb = x.transpose(2,1).transpose(1,0)
+        out, self.hidden_out = self.lstm(emb)#, self.hidden)
+        out = self.Attention(out.transpose(0,1).transpose(1,2))
+#        print(self.hidden.shape)
+        self.hidden=self.init_hidden(self.hidden_out)
+#        print(self.hidden.shape)
+        return out       
+
+class TemporalAttention(nn.Module):
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super(TemporalAttention, self).__init__()
+        self.conv1 = Conv1d_tanh(in_channels, mid_channels, **kwargs)
+        self.conv2 = Conv1d_softmax(mid_channels, 1, **kwargs)
+    def forward(self, x):
+        AttentionWs = self.conv2(self.conv1(x)).transpose(2,1)
+        outputs = torch.bmm( x , AttentionWs )
+        return outputs
+
+
+class TemporalAttention_withCenLoss(nn.Module):
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super(TemporalAttention_withCenLoss, self).__init__()
+        self.conv1 = Conv1d_tanh(in_channels, mid_channels, **kwargs)
+        self.conv2 = Conv1d_softmax(mid_channels, 1, **kwargs)
+    def forward(self, x):
+        AttentionWs = self.conv2(self.conv1(x)).transpose(2,1)
+        outputs = torch.bmm( x , AttentionWs )
+        y = outputs.repeat(1,1,5)
+        z = (x-y)
+        z = z.mul(z)
+        z = torch.bmm(z, AttentionWs)
+        CenLoss = z.squeeze(-1).sum(dim=-1)
+        return outputs, CenLoss
+
+class Conv1d_tanh(nn.Module):
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super(Conv1d_tanh, self).__init__()
+        self.group1 = nn.Sequential(
+            OrderedDict([
+                ('conv', nn.Conv1d(in_channels, out_channels, bias=False, **kwargs)),
+                ('bn', nn.BatchNorm2d(out_channels, eps=0.001))
+            ])
+        )
+    def forward(self, x):
+        x = self.group1(x)
+        return F.tanh(x)
+
+class Conv1d_sigmoid(nn.Module):
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super(Conv1d_sigmoid, self).__init__()
+        self.group1 = nn.Sequential(
+            OrderedDict([
+                ('conv', nn.Conv1d(in_channels, out_channels, bias=False, **kwargs)),
+                ('bn', nn.BatchNorm2d(out_channels, eps=0.001))
+            ])
+        )
+    def forward(self, x):
+        x = self.group1(x)
+        return F.sigmoid(x)
+
+class Conv1d_softmax(nn.Module):
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super(Conv1d_softmax, self).__init__()
+        self.group1 = nn.Sequential(
+            OrderedDict([
+                ('conv', nn.Conv1d(in_channels, out_channels, bias=False, **kwargs))#,                ('bn', nn.BatchNorm2d(out_channels, eps=0.001))
+            ])
+        )
+    def forward(self, x):
+        x = self.group1(x)
+        return F.softmax(x,dim=1)#.squeeze(-2), dim=1)
+
+class BasicConv2d(nn.Module):
+
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super(BasicConv2d, self).__init__()
+        self.group1 = nn.Sequential(
+            OrderedDict([
+                ('conv', nn.Conv2d(in_channels, out_channels, bias=False, **kwargs)),
+                ('bn', nn.BatchNorm2d(out_channels, eps=0.001))
+            ])
+        )
+
+    def forward(self, x):
+        x = self.group1(x)
+        return F.relu(x, inplace=True)
