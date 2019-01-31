@@ -28,7 +28,7 @@ def SpaNet(pretrained=False, model_root=None, **kwargs):
     return GloLocNet(**kwargs)
 #    return TopAttention(**kwargs)
 class GloLocNet(nn.Module):
-    def __init__(self, glo_channels, loc_channels, out_channels, num_classes=101, aMid=0.001, transform_input=False, drop_rate=0.5):
+    def __init__(self, glo_channels, loc_channels, out_channels, num_classes=101, aMid=0.001, transform_input=False, drop_rate=0.5, out_type='all'):
         super(GloLocNet, self).__init__()
         self.GloAttention = SpaAttention(glo_channels, glo_channels, 1, kernel_size=1)
         self.LocAttention = SpaAttention(loc_channels, loc_channels, 1, kernel_size=1)
@@ -39,6 +39,7 @@ class GloLocNet(nn.Module):
         self.fc_cat = nn.Sequential(OrderedDict([('cat_fc', nn.Linear(loc_channels+glo_channels, num_classes))]))
         self.drop_rate = drop_rate
         self.cc = nn.CrossEntropyLoss(reduce=False)
+        self.type = out_type
     def forward(self, x):
         # global attention
         glo = x[0]
@@ -81,7 +82,13 @@ class GloLocNet(nn.Module):
             loss = torch.mul(-one_hot,torch.log(score_loc)).sum(-1)#self.cc(x_loc, label)
             loss_com = torch.mul(loss_w, loss).mean()
         #else:
-        score = score_glo + 0.3*score_loc#torch.mul(loss_w.unsqueeze(1).repeat(1,x_glo.size(1)), score_loc)
+        if self.type == 'all':
+            score = score_glo + 0.2 * score_loc
+        elif self.type == 'glo':
+            score = score_glo
+        elif self.type == 'loc':
+            score = score_loc
+#        score = score_glo #+ 0.2 * score_loc#torch.mul(loss_w.unsqueeze(1).repeat(1,x_glo.size(1)), score_loc)
         #score = score_glo #+ 0.1*score_loc#torch.mul(loss_w.unsqueeze(1).repeat(1,x_glo.size(1)), score_loc)
         #print(labels.shape)
         # concat
@@ -165,7 +172,7 @@ class SpaAttention_withW(nn.Module):
         return outputs, AttentionWs
 class MultiLevelAttention(nn.Module):
 
-    def __init__(self, in_channels, mid_channels, out_channels, num_classes=101, aMid=0.001, transform_input=False, drop_rate=0.5):
+    def __init__(self, in_channels, mid_channels, out_channels, num_classes=101, aMid=0.001, transform_input=False, drop_rate=0.5, out_type='time'):
         super(MultiLevelAttention, self).__init__()
         self.ShortTermNet = TemporalAttention_withCenLoss(in_channels, mid_channels, 1, kernel_size=1)
         self.MidTermNet = TemporalAttention(in_channels, out_channels, 1, kernel_size=1, withW=True)
@@ -179,6 +186,7 @@ class MultiLevelAttention(nn.Module):
         self.drop_rate = drop_rate
         self.loss = torch.zeros([1,1])
         self.aMid = aMid
+        self.type = out_type
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
                 import scipy.stats as stats
@@ -203,8 +211,11 @@ class MultiLevelAttention(nn.Module):
         x = self.TimeNet(x)
         # Other outputs
         #x = x.sum(-1).squeeze(-1)
-        #x = xMid
-        #x = xShort
+        if   self.type=='short': x = xShort
+        elif self.type=='mid' : x = xMid
+        elif self.type=='long': x = xLong
+        elif self.type=='short+mid':x = (xShort+xMid)/2
+        elif self.type=='short+mid+long': x = (xShort+xMid+xLong)/3
         # Classification with fc
         x = x.view(x.size(0), -1)
         x = F.dropout(x, p=self.drop_rate, training=self.training)

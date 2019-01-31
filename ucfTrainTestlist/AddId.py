@@ -1,5 +1,6 @@
+#! /home/ss/lmy/anaconda/envs/py27/bin/python2
 labelFile = 'classInd.txt'
-tarfile = 'testlist01.txt'
+tarfile = 'testlist03.txt'
 
 Dict = {}
 with open(labelFile) as F:
