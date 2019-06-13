@@ -71,6 +71,7 @@ class GloLocNet(nn.Module):
         loc = torch.split(loc,self.n,dim=0) if self.training else torch.split(loc,25,dim=0)
         loc = torch.stack(loc,dim=0)
         loc = loc.transpose(1,2).squeeze(-1).mean(-1)
+        return glo_w, loc_w
         # top
         #top = x[2]
         #top = top.squeeze().transpose(1,2).mean(-1)
@@ -80,9 +81,7 @@ class GloLocNet(nn.Module):
         #   The loss consider that the local attention map should focus on the regions which global attention focus on.
         #   simple to minimize sum(P(~Mglobal)*P(Mlocal))
         #   need to renice
-        
-
-        # attention guided loss
+        '''
         glo_w = glo_w.view(glo_x.size(0), glo_x.size(2), glo_x.size(3))
         glo_w = F.upsample(glo_w.unsqueeze(1), size=(17,17), mode='bilinear').squeeze(1).view(glo_w.size(0),-1)
         glo_w_max = torch.max(glo_w, dim=-1, keepdim=True)[0]
@@ -93,7 +92,7 @@ class GloLocNet(nn.Module):
         loc_w_max = loc_w_max.repeat(1,loc_w.size(1))
         loc_w = torch.div(loc_w, loc_w_max)
         loss_gui = torch.mul(glo_w_, loc_w).mean().mean()
-        
+        '''
         # comput complemented loss for global and local deep feat
         one_hot = x[-1]
         #glo = F.dropout(glo, p=self.drop_rate, training=self.training)
@@ -130,7 +129,7 @@ class GloLocNet(nn.Module):
         if self.type == 'loc':
           output = x_loc
         if self.training:
-            return output, score, 0.1*loss_gui
+            return output, score, 0#0.1*loss_gui
         else:
             return output, score, loss
 
@@ -238,7 +237,7 @@ class MultiLevelAttention(nn.Module):
         w_diff = (wMid-wShort).squeeze(-1)
         lossMid = w_diff.mul(w_diff).mean(-1).mean(-1)
         # Long Term Net
-        xLong, lossLong = self.LongTermNet(x[1])
+        xLong, lossLong ,wLong= self.LongTermNet(x[1])
         # Time Net
         x = torch.cat([xShort, xMid, xLong],-1)
         x = self.TimeNet(x)
@@ -254,7 +253,7 @@ class MultiLevelAttention(nn.Module):
         x = F.dropout(x, p=self.drop_rate, training=self.training)
         x = self.group1(x)
         #return x, None, None,None
-        return x, lossShort, lossMid, lossLong
+        return wShort, wMid, wLong
 
 class LongTermAttention(nn.Module):
     def __init__(self, in_channels, mid_channels, out_channels, **kwargs):
@@ -281,7 +280,7 @@ class LongTermAttention(nn.Module):
           loss = self.loss
         #out = out.transpose(1,2).sum(-1)
         #loss = self.loss
-        return out, loss.mean(-1)
+        return out, loss.mean(-1), w
 
 class TemporalAttention(nn.Module):
     def __init__(self, in_channels, mid_channels, out_channels=1, withW=False, **kwargs):

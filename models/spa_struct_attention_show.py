@@ -27,13 +27,90 @@ def inception_v3(pretrained=False, model_root=None, **kwargs):
 def TimeNet(pretrained=False, model_root=None, **kwargs):
     return MultiLevelAttention(**kwargs)
 
-def SpaNet(pretrained=False, model_root=None, **kwargs):
-    return GloLocNet(**kwargs)
+def SpaNet(pretrained=False, model_root=None, model_type='str', **kwargs):
+  if model_type is 'str':
+    return SpaStrNet(**kwargs)
+  elif model_type is 'old':
+    return OldAttNet(**kwargs)
+  else :
+    raise ValueError
+#    return GloLocNet(**kwargs)
 #    return TopAttention2(**kwargs)
+
+class SpaStrNet(nn.Module):
+    def __init__(self, glo_channels, loc_channels, out_channels, num_classes=101, aMid=0.001, transform_input=False, drop_rate=0.5, out_type='glo', n=5):
+        super(SpaStrNet, self).__init__()
+        self.strnet=StrAttention(glo_channels, loc_channels, 1)
+        self.fc = nn.Sequential(OrderedDict([('fc', nn.Linear(glo_channels+loc_channels, num_classes))]))
+        self.n = n
+        self.comLoss = comLoss(glo_channels, loc_channels, num_classes)
+    def forward(self, x_input):
+        x = x_input[0]
+        x_list = torch.split(x,1,dim=0)
+        x = torch.cat([a.squeeze(dim=0) for a in x_list],dim=0)
+        w  = self.strnet(x)
+        return w
+        obj = torch.split(obj,self.n,dim=0) if self.training else torch.split(obj,25,dim=0)
+        obj = torch.stack(obj,dim=0)
+        obj = obj.transpose(1,2).squeeze(-1).mean(-1)
+        stu = torch.split(stu,self.n,dim=0) if self.training else torch.split(stu,25,dim=0)
+        stu = torch.stack(stu,dim=0)
+        stu = stu.transpose(1,2).squeeze(-1).mean(-1)
+        com_loss = self.comLoss(obj, stu, x_input[-1])
+        x = torch.cat([obj,stu], dim=1)
+        x = self.fc(x)
+        output = x
+        if self.training:
+            return output, com_loss
+        else:
+            return output
+
+class comLoss(nn.Module):
+    def __init__(self, glo_dim, loc_dim, num_classes, drop_rate=0.5, **kwargs):
+        super(comLoss, self).__init__()
+        self.drop_rate = drop_rate
+        self.fc_glo = nn.Sequential(OrderedDict([('glo_fc', nn.Linear(glo_dim, num_classes))]))
+        self.fc_loc = nn.Sequential(OrderedDict([('loc_fc', nn.Linear(loc_dim, num_classes))]))
+    def forward(self, glo, loc, one_hot):
+        glo = F.dropout(glo, p=self.drop_rate, training=self.training)
+        x_glo = self.fc_glo(glo)
+        score_glo = F.softmax(x_glo, dim=-1)
+        x_loc = self.fc_loc(loc)
+        score_loc = F.softmax(x_loc, dim=-1)
+        if  self.training:
+            loss_w = 1-torch.mul(score_glo, one_hot).sum(-1)
+            loss = torch.mul(-one_hot,torch.log(score_loc)).sum(-1)#self.cc(x_loc, label)
+            loss_com = torch.mul(loss_w, loss).mean()
+        else:
+            loss_com = 0
+        return loss_com
+
+class OldAttNet(nn.Module):
+    def __init__(self, glo_channels, loc_channels, out_channels, num_classes=101, aMid=0.001, transform_input=False, drop_rate=0.5, out_type='glo', n=5):
+        super(OldAttNet, self).__init__()
+        self.Attention = SpaAttention(glo_channels, loc_channels, 1, kernel_size=1)
+        self.fc = nn.Sequential(OrderedDict([('fc', nn.Linear(glo_channels, num_classes))]))
+        self.n = n
+    def forward(self, x_input):
+        x = x_input[0]
+        x_list = torch.split(x,1,dim=0)
+        x = torch.cat([a.squeeze(dim=0) for a in x_list],dim=0)
+        obj, w = self.Attention(x)
+        return w
+        obj = torch.split(obj,self.n,dim=0) if self.training else torch.split(obj,25,dim=0)
+        obj = torch.stack(obj,dim=0)
+        obj = obj.transpose(1,2).squeeze(-1).mean(-1)
+        x = self.fc(obj)
+        output = x
+        if self.training:
+            return output
+        else:
+            return output
+
 class GloLocNet(nn.Module):
     def __init__(self, glo_channels, loc_channels, out_channels, num_classes=101, aMid=0.001, transform_input=False, drop_rate=0.5, out_type='glo', n=5):
         super(GloLocNet, self).__init__()
-        self.GloAttention = SpaAttention(glo_channels, glo_channels, 1, kernel_size=1)
+        self.Attention = SpaAttention(glo_channels, glo_channels, 1, kernel_size=1)
         self.LocAttention = SpaAttention(loc_channels, loc_channels, 1, kernel_size=1)
         self.resize = torch.nn.Upsample(size=(17,17))
         self.pool = nn.AvgPool2d(8)
@@ -115,7 +192,6 @@ class GloLocNet(nn.Module):
         #    score = score_loc
 #        score = score_glo #+ 0.2 * score_loc#torch.mul(loss_w.unsqueeze(1).repeat(1,x_glo.size(1)), score_loc)
         score = score_glo #+ 0.1*score_loc#torch.mul(loss_w.unsqueeze(1).repeat(1,x_glo.size(1)), score_loc)
-        #print(labels.shape)
         # concat
         '''
         x = torch.cat([glo,loc],dim=1)
@@ -181,14 +257,35 @@ class TopAttention2(nn.Module):
         x = F.dropout(x, p=self.drop_rate, training=self.training)
         x = self.group1(x)
         return x
+
+class StrAttention(nn.Module):
+    def __init__(self, in_channels, mid_channels, out_channels, withW=False, **kwargs):
+        super(StrAttention, self).__init__()
+        self.conv1 = Conv2d_tanh(in_channels, mid_channels, kernel_size=1, **kwargs)
+        self.conv2 = Conv2d_softmax(mid_channels, 1, kernel_size=1, **kwargs)
+        self.str1_1 = Conv2d_relu(in_channels, mid_channels, kernel_size=3, padding=1, **kwargs)
+        self.str1_2 = Conv2d_relu(in_channels, mid_channels, kernel_size=5, padding=2, **kwargs)
+        self.str2_1 = Conv2d_relu(2*mid_channels, mid_channels, kernel_size=3, padding=1, **kwargs)
+    def forward(self, input_x):
+        x = self.conv1(input_x)
+        AttentionWs = self.conv2(x)
+#  structure information part
+        a1 = self.str1_1(input_x)
+        a2 = self.str1_2(input_x)
+        str1 = torch.cat([a1, a2], dim=1)
+        str2 = self.str2_1(str1)
+#        x = torch.cat([x, str2], dim=1)
+        obj = torch.bmm( input_x.view(input_x.size(0),input_x.size(1),-1) , AttentionWs.unsqueeze(-1) ).squeeze(-1)
+        stu = torch.bmm( str2.view(str2.size(0),str2.size(1),-1) , AttentionWs.unsqueeze(-1) ).squeeze(-1)
+        return AttentionWs
 class SpaAttention(nn.Module):
     def __init__(self, in_channels, mid_channels, out_channels, withW=False, **kwargs):
         super(SpaAttention, self).__init__()
         self.conv1 = Conv2d_tanh(in_channels, mid_channels, **kwargs)
         self.conv2 = Conv2d_softmax(mid_channels, 1, **kwargs)
     def forward(self, x):
-        x = self.conv1(x)
-        AttentionWs = self.conv2(x)
+        x1 = self.conv1(x)
+        AttentionWs = self.conv2(x1)
         outputs = torch.bmm( x.view(x.size(0),x.size(1),-1) , AttentionWs.unsqueeze(-1) )
         return outputs.squeeze(-1), AttentionWs
 class SpaAttention_withW(nn.Module):
@@ -351,6 +448,21 @@ class Conv1d_softmax(nn.Module):
     def forward(self, x):
         x = self.group1(x)
         return F.softmax(x,dim=-1)#.squeeze(-2), dim=1)
+
+
+class Conv2d_relu(nn.Module):
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super(Conv2d_relu, self).__init__()
+        self.group1 = nn.Sequential(
+            OrderedDict([
+                ('conv', nn.Conv2d(in_channels, out_channels, bias=True, **kwargs)),
+                ('bn', nn.BatchNorm2d(out_channels, eps=0.001))
+            ])
+        )
+
+    def forward(self, x):
+        x = self.group1(x)
+        return F.relu(x)
     
 class Conv2d_tanh(nn.Module):
     def __init__(self, in_channels, out_channels, **kwargs):

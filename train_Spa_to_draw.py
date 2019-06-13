@@ -20,7 +20,7 @@ from torch.autograd import Variable
 import sys
 
 # print(sys.path)
-from models.spa_struct_attention import *
+from models.multi_level_attention import *
 import numpy as np
 import datasets
 def adjust_learning_rate(optimizer, decay_rate=.9):
@@ -36,7 +36,6 @@ parser.add_argument('--a', nargs='+', default=None, type=float)
 parser.add_argument('--type', default='all')
 parser.add_argument('--log_file', default='log/spa.csv')
 parser.add_argument('--epoch_num', type=int, default=50)
-parser.add_argument('--mid_dim', type=int, default=1280)
 
 parser.add_argument('--n', type=int, default=5)
 args = parser.parse_args()
@@ -51,12 +50,11 @@ loss_a = [0,0,0] if args.a is None else args.a
 drop_rate = 0.5 if args.drop_rate is None else args.drop_rate
 epoch_num = args.epoch_num
 read_workers = 16
-mid_dim = 512 if args.dataset=='HMDB51' else 1280
 score_out = 0
 class_num = 101 if args.dataset=='UCF101' else 51
 split_dir = 'ucfTrainTestlist' if args.dataset=='UCF101' else 'hmdbTrainTestlist'
 base_dir = '/home/ss/feats' if args.base_dir is None else args.base_dir
-feat_list = ['mixed_8_join']#,'mixed_7_join']#, 'top_cls_global_pool']#['mixed_7_join','mixed_8_join','mixed_10_join']
+feat_list = ['mixed_8_join','mixed_7_join']#, 'top_cls_global_pool']#['mixed_7_join','mixed_8_join','mixed_10_join']
 print(feat_list)
 # Data
 print('==> Preparing data..')
@@ -68,7 +66,7 @@ trainset = datasets.UCF101_mixed_v3_dict(
               ,'mixed_7_join' :os.path.join(base_dir,args.dataset+'_rgb_mix7_v3_npz') 
              # ,'top_cls_global_pool':os.path.join(base_dir,args.dataset+'_rgb_top_v3_npz')
              },
-    label=os.path.join(split_dir,'trainlist0'+args.split+'.txt'), 
+    label=os.path.join(split_dir,'alllist.txt'), 
     ext = '_rgb.npz',
     is_training=True,
     feat_list = feat_list,
@@ -94,7 +92,7 @@ testset = datasets.UCF101_mixed_v3_dict(
     )
 testloader = torch.utils.data.DataLoader(testset, batch_size=32, shuffle=False, num_workers=read_workers)
 dim = 2048
-net = SpaNet(glo_channels=1280, loc_channels=mid_dim, out_channels=1, num_classes=class_num, drop_rate=drop_rate, out_type=args.type, n=args.n)
+net = SpaNet(glo_channels=1280, loc_channels=768, out_channels=dim, num_classes=class_num, drop_rate=drop_rate, out_type=args.type, n=args.n)
 if use_cuda:
     net.cuda()
     net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
@@ -105,6 +103,8 @@ criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
 #optimizer = optim.Adam( filter(lambda p: p.requires_grad, net.parameters()),lr = args.lr, weight_decay=5e-4)
 # Training
+net.load_state_dict(torch.load('UCF101_split1_rgb_98.678_model'))
+
 def test_with_score(score):
     true_num = 0.0
     ids = np.argmax(score, axis=1)
@@ -122,17 +122,18 @@ def train(epoch):
         tar_hot = torch.zeros(targets.size(0), class_num).scatter_(1, targets.unsqueeze(1), 1.0)
         if use_cuda:
             inputs, targets, tar_hot = [x.cuda() for x in inputs], targets.cuda(), tar_hot.cuda()
+        
         optimizer.zero_grad()
         inputs, targets, tar_hot = [Variable(x) for x in inputs], Variable(targets), Variable(tar_hot)
-        outputs, comloss = net(inputs+[tar_hot])
+        cat, outputs, addloss = net(inputs+[tar_hot])
         #loss_2 = torch.mul(- tar_hot , torch.log(outputs)).sum(-1).mean()
-        loss = criterion(outputs, targets) + loss_a[0] * comloss
+        loss_cat = criterion(cat, targets)#+addloss
         #loss = loss_cat + loss_2
-        loss.backward()
+        loss_cat.backward()
         optimizer.step()
 
-        train_loss += loss.data[0]
-        _, predicted = torch.max(outputs.data, 1)
+        train_loss = loss_cat.data[0]#+= loss.data[0]
+        _, predicted = torch.max(cat.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
 
@@ -155,7 +156,7 @@ def test(epoch, get_score = False):
         if use_cuda:
             inputs, targets, tar_hot = [x.cuda() for x in inputs], targets.cuda(), tar_hot.cuda()
         inputs, targets, tar_hot = [Variable(x, volatile=True) for x in inputs], Variable(targets), Variable(tar_hot)
-        outputs = net(inputs)
+        outputs, score, addloss = net(inputs+[tar_hot])
         #loss_2 = torch.mul(- tar_hot , torch.log(outputs)).sum(-1).mean()
         loss_cat = criterion(outputs, targets)#+addloss
         loss = loss_cat# + addloss
@@ -194,11 +195,11 @@ for epoch in range(start_epoch, start_epoch+epoch_num):
         a = test(epoch, get_score = True)
     if epoch-best_epoch>5:
         break
-    torch.save(net, args.dataset+'_split'+args.split+'_rgb'+'_%.3f'%(best_acc)+'_model.pkl')
+    torch.save(net.state_dict(), args.dataset+'_split'+args.split+'_rgb'+'_%.3f'%(best_acc)+'_model')
 
 np.save("scores/"+args.dataset+'_split'+args.split+'_rgb'+'_%.3f'%(best_acc),score_out)
-print(best_acc, loss_a)
+print(best_acc, CenLoss_a)
 with open(args.log_file, 'a+') as f:
     import time
     local_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-    f.write(','.join([local_time, '%.2f'%(best_acc),args.dataset,args.split,'rgb', args.type+str(mid_dim)]+ [str(x) for x in  loss_a])+'\n')
+    f.write(','.join([local_time, '%.2f'%(best_acc),args.dataset,args.split,'rgb', args.type]+ [str(x) for x in  loss_a])+'\n')

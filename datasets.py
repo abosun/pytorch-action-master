@@ -86,14 +86,14 @@ def mixed_loader(path, feat_list, is_training=False):
     return feats[0].squeeze()
   except:
     print(path)
-def mixed_loader1(path, feat_name, is_training=False):
+def mixed_loader1(path, feat_name, is_training=False, n=5):
     data = np.load(path,encoding="latin1")
     feat = data[feat_name]
     if not is_training:
         return feat
     tmp = []
-    for i in range(5):
-        tmp.append(feat[random.randint(0,4)+i*5])
+    for i in range(n):
+        tmp.append(feat[random.randint(0,n-1)+i*n])
     feat = np.stack(tmp,axis=0)
     return feat.squeeze()
 
@@ -208,8 +208,8 @@ class UCF101_mixed_v3(data.Dataset):
         return len(self.datas)
 class UCF101_mixed_v3_dict(data.Dataset):
     def __init__(self, rootDict, label, class_info=None, transform = None, target_transform=None, 
-                 loader=mixed_loader1, is_training=False, ext='_flow.npy', feat_list=None):
-        
+                 loader=mixed_loader1, is_training=False, ext='_flow.npy', feat_list=None, n=5):
+        self.n = n
         self.feat_list = feat_list
         self.ext = ext
         fh = open(label)
@@ -227,7 +227,7 @@ class UCF101_mixed_v3_dict(data.Dataset):
         fn, label = self.datas[index]
         data_list = []
         for feat_name in self.feat_list:
-            data_list.append(self.loader(os.path.join(self.rootDict[feat_name], fn),feat_name, self.is_training))
+            data_list.append(self.loader(os.path.join(self.rootDict[feat_name], fn),feat_name, self.is_training, self.n))
         return data_list, label
     def __len__(self):
         return len(self.datas)

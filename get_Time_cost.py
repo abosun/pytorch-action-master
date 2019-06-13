@@ -70,7 +70,7 @@ print('==> Preparing data..')
 trainset = datasets.UCF101_Top_multi_v3(
     root_short=os.path.join(base_dir, args.dataset+'_flow_top_short_v3'),
     root_mid=os.path.join(base_dir, args.dataset+'_flow_top_v3'), 
-    label=os.path.join(split_dir,'trainlist0'+args.split+'.txt'), 
+    label=os.path.join(split_dir,'alllist.txt'), 
     is_training=True
     )
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=1)
@@ -81,7 +81,7 @@ testset = datasets.UCF101_Top_multi_v3(
     label=os.path.join(split_dir,'testlist0'+args.split+'.txt'), 
     is_training=False
     )
-testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=1)
+testloader = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False, num_workers=1)
 
 net = TimeNet(in_channels=2048, mid_channels=101, out_channels=2048, num_classes=class_num, drop_rate=drop_rate, out_type=args.type)
 if use_cuda:
@@ -123,8 +123,7 @@ def train(epoch):
         _, predicted = torch.max(outputs.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
-        print(targets.data,predicted)
-        raise ValueError
+
         progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.2f%% (%d/%d)'
             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
     adjust_learning_rate(optimizer, 0.9)
@@ -155,41 +154,11 @@ def test(epoch, get_score=False):
 
         progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.2f%% (%d/%d)'
             % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
-        if get_score :
-          score = F.softmax(outputs,dim=-1).cpu().data.numpy()
-          score_res.append(score)
     
 
-    # Save checkpoint.
-    acc = 100.*correct/total
-    if acc > best_acc:
-        print('Saving..%.2f'%(acc),args.dataset, args.split, 'flow', args.type ,args.a)
-        state = {
-            'net': net.module if use_cuda else net,
-            'acc': acc,
-            'epoch': epoch,
-        }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        #torch.save(state, './checkpoint/time_shot_ckpt.t7')
-        best_acc = acc
-        score_out = np.vstack(score_res)
-        best_epoch = epoch
-    if get_score: return np.vstack(score_res)
-
-for epoch in range(start_epoch, start_epoch+epoch_num):
-    #if epoch>1:
-        #net = stop_grad(net, set())
-    #    optimizer = optim.Adam( net.parameters(),lr = args.lr, weight_decay=5e-4)   
-
-    train(epoch)
-    a = test(epoch, get_score = True)
-    if epoch - best_epoch > 8:
-        break
-np.save("scores/"+args.dataset+'_split'+args.split+'_flow'+"_%.2f"%(best_acc),score_out)
-print("%.2f"%(best_acc), loss_a)
-with open(args.log_file, 'a+') as f:
+if __name__=='__main__':
     import time
-    local_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
-    f.write(','.join([local_time, '%.2f'%(best_acc), args.dataset, args.split,'flow', args.type]+[str(x) for x in args.a])+'\n')
-
+    start = time.clock()
+    test(0,get_score=False)
+    end = time.clock()
+    print(end-start)

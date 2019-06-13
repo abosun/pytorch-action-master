@@ -70,7 +70,7 @@ print('==> Preparing data..')
 trainset = datasets.UCF101_Top_multi_v3(
     root_short=os.path.join(base_dir, args.dataset+'_flow_top_short_v3'),
     root_mid=os.path.join(base_dir, args.dataset+'_flow_top_v3'), 
-    label=os.path.join(split_dir,'trainlist0'+args.split+'.txt'), 
+    label=os.path.join(split_dir,'alllist.txt'), 
     is_training=True
     )
 trainloader = torch.utils.data.DataLoader(trainset, batch_size=32, shuffle=True, num_workers=1)
@@ -123,8 +123,7 @@ def train(epoch):
         _, predicted = torch.max(outputs.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
-        print(targets.data,predicted)
-        raise ValueError
+
         progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.2f%% (%d/%d)'
             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
     adjust_learning_rate(optimizer, 0.9)
@@ -164,13 +163,6 @@ def test(epoch, get_score=False):
     acc = 100.*correct/total
     if acc > best_acc:
         print('Saving..%.2f'%(acc),args.dataset, args.split, 'flow', args.type ,args.a)
-        state = {
-            'net': net.module if use_cuda else net,
-            'acc': acc,
-            'epoch': epoch,
-        }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
         #torch.save(state, './checkpoint/time_shot_ckpt.t7')
         best_acc = acc
         score_out = np.vstack(score_res)
@@ -186,7 +178,8 @@ for epoch in range(start_epoch, start_epoch+epoch_num):
     a = test(epoch, get_score = True)
     if epoch - best_epoch > 8:
         break
-np.save("scores/"+args.dataset+'_split'+args.split+'_flow'+"_%.2f"%(best_acc),score_out)
+    torch.save(net.state_dict(), args.dataset+'_split'+args.split+'_flow'+'_%.3f'%(best_acc)+'_model')
+
 print("%.2f"%(best_acc), loss_a)
 with open(args.log_file, 'a+') as f:
     import time
