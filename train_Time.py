@@ -123,8 +123,6 @@ def train(epoch):
         _, predicted = torch.max(outputs.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
-        print(targets.data,predicted)
-        raise ValueError
         progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.2f%% (%d/%d)'
             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
     adjust_learning_rate(optimizer, 0.9)

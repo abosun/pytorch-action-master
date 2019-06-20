@@ -37,6 +37,8 @@ parser.add_argument('--a', nargs='+', default=None, type=float)
 parser.add_argument('--type', default='all')
 parser.add_argument('--log_file', default='log/spa.csv')
 parser.add_argument('--epoch_num', type=int, default=50)
+parser.add_argument('--img_id', type=int, default=0)
+
 
 parser.add_argument('--n', type=int, default=5)
 args = parser.parse_args()
@@ -57,7 +59,7 @@ split_dir = 'ucfTrainTestlist' if args.dataset=='UCF101' else 'hmdbTrainTestlist
 base_dir = '/home/ss/feats' if args.base_dir is None else args.base_dir
 feat_list = ['mixed_8_join']#, 'top_cls_global_pool']#['mixed_7_join','mixed_8_join','mixed_10_join']
 BATCH_SIZE=32
-frame_id = 0
+frame_id = args.img_id
 print(feat_list)
 # Data
 print('==> Preparing data..')
@@ -150,7 +152,7 @@ def get_showing_img(image, w_glo, w_loc):
     heat_glo = CAM(image, w_glo,0.5)
     heat_loc = CAM(image, w_loc,0.5)
     #heat_loc_glo = CAM(image, np.multiply(w_loc,w_glo),0.6)
-    res = np.concatenate([image, heat_glo, heat_loc], axis=0)
+    res = [image, heat_glo, heat_loc]
     return res
 
 def get_showing_str(image, w_glo):
@@ -168,7 +170,10 @@ def _fun(heat_map_glo, heat_map_loc, path, ids):
     heat_map_loc = heat_map_loc/heat_map_loc.max()
     heat_map_loc = np.reshape(heat_map_loc,(8,8))
     res = get_showing_img(image, heat_map_glo, heat_map_loc)
-    cv.imwrite('ucf101show_strold'+'%02d'%(frame_id)+'/'+path_list[ids]+'.jpg',res)
+    cv.imwrite('ucf101show_strold'+'%02d'%(frame_id)+'/'+path_list[ids]+'_0.jpg',res[0])
+    cv.imwrite('ucf101show_strold'+'%02d'%(frame_id)+'/'+path_list[ids]+'_1.jpg',res[1])
+    cv.imwrite('ucf101show_strold'+'%02d'%(frame_id)+'/'+path_list[ids]+'_2.jpg',res[2])
+
     print( path_list[ids], 'has done')
 
 def _fun_str(heat_map, path, ids):

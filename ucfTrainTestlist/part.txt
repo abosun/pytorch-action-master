@@ -1,0 +1,9 @@
+Skijet/v_Skijet_g06_c01.avi 1
+Rafting/v_Rafting_g14_c01.avi 1
+StillRings/v_StillRings_g05_c01.avi 1
+CuttingInKitchen/v_CuttingInKitchen_g21_c03.avi 1
+CuttingInKitchen/v_CuttingInKitchen_g17_c01.avi 1
+Knitting/v_Knitting_g16_c05.avi 1
+PlayingDhol/v_PlayingDhol_g17_c07.avi 1
+PlayingFlute/v_PlayingFlute_g17_c01.avi 1
+YoYo/v_YoYo_g01_c01.avi 1
